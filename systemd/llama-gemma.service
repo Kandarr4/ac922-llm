@@ -1,0 +1,26 @@
+[Unit]
+Description=llama-server: Gemma 4 26B-A4B on GPU 2-3 (socket 8)
+After=network-online.target nvidia-persistenced.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=llm
+Group=llm
+Environment=CUDA_VISIBLE_DEVICES=2,3
+Environment=LD_LIBRARY_PATH=/usr/local/cuda/lib64
+ExecStart=/usr/bin/numactl --cpunodebind=8 --membind=8 \
+  /home/llm/llama.cpp/build/bin/llama-server \
+  --model /home/llm/models/gemma-4-26B-A4B-it-UD-Q6_K.gguf \
+  --alias gemma4-26b-a4b \
+  --host 0.0.0.0 --port 8081 \
+  --n-gpu-layers 99 \
+  --ctx-size 131072 \
+  --parallel 8 \
+  --threads 20 \
+  --metrics
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

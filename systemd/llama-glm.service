@@ -1,0 +1,32 @@
+[Unit]
+Description=llama-server: GLM-5.3-Flash 320B-A18B UD-Q5_K_XL (MoE experts in RAM, rest on GPU 2-3)
+After=network-online.target nvidia-persistenced.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=llm
+Group=llm
+Environment=CUDA_VISIBLE_DEVICES=2,3
+Environment=LD_LIBRARY_PATH=/usr/local/cuda/lib64
+# 240 GB of weights do not fit one NUMA node (256 GB each) -> interleave pages over both sockets.
+# --no-mmap: weights are allocated anonymously, so the interleave policy applies to them.
+# No -ngl / -ot: --fit (default on) puts everything on GPU it can and spills MoE experts to RAM.
+# MTP (after baseline is measured): --spec-type draft-mtp --spec-draft-n-max 2
+ExecStart=/usr/bin/numactl --interleave=all \
+  /home/llm/llama.cpp-glm5next/build/bin/llama-server \
+  --model /home/llm/models/GLM-5.3-Flash-UD-Q5_K_XL/GLM-5.3-Flash-UD-Q5_K_XL-00001-of-00006.gguf \
+  --alias glm-5.3-flash \
+  --host 0.0.0.0 --port 8082 \
+  --no-mmap \
+  --ctx-size 65536 \
+  --parallel 1 \
+  --threads 80 \
+  --temp 1.0 --top-p 0.95 \
+  --metrics
+Restart=on-failure
+RestartSec=30
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=multi-user.target
