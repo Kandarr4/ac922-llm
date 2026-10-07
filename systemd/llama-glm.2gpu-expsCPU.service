@@ -1,5 +1,5 @@
 [Unit]
-Description=llama-server: GLM-5.3-Flash 320B-A18B UD-Q5_K_XL (all 4 GPUs + MoE experts spilled to RAM)
+Description=llama-server: GLM-5.3-Flash 320B-A18B UD-Q5_K_XL (MoE experts in RAM, rest on GPU 2-3)
 After=network-online.target nvidia-persistenced.service
 Wants=network-online.target
 
@@ -7,17 +7,14 @@ Wants=network-online.target
 Type=simple
 User=llm
 Group=llm
-Environment=CUDA_VISIBLE_DEVICES=0,1,2,3
+Environment=CUDA_VISIBLE_DEVICES=2,3
 Environment=LD_LIBRARY_PATH=/usr/local/cuda/lib64
 # 240 GB of weights do not fit one NUMA node (256 GB each) -> interleave pages over both sockets.
 # --load-mode none (no mmap; llama.cpp 0.6 has no --no-mmap): weights are allocated anonymously,
 # so the interleave policy applies to them.
-# No -ngl / -ot: --fit (default on) fills the 4 GPUs and spills the rest of the MoE experts to RAM.
-#   2-GPU fallback with explicit placement: llama-glm.2gpu-expsCPU.service (-ngl 99 -ot exps=CPU).
-# --no-op-offload: otherwise every prompt ubatch copies all CPU-side experts to the GPU from pageable
+# -ngl 99 + exps=CPU: whole graph on GPU, only MoE experts in RAM. (--fit alone put whole layers on CPU.)
+# --no-op-offload: otherwise every prompt ubatch copies all ~220 GB of experts to the GPU from pageable
 #   memory (single thread) -> prompt 1.3 t/s; without it the experts run on CPU -> 11-16 t/s.
-# --chat-template-file: stock template always opens <think>; the patched one honours
-#   chat_template_kwargs.enable_thinking=false (prefills <think></think>). Depth: reasoning_effort low|high|max.
 # MTP (--spec-type draft-mtp) is not implemented for glm5-next in llama.cpp 0.6 ("NextN graph not implemented yet").
 ExecStart=/usr/bin/numactl --interleave=all -- \
   /home/llm/llama.cpp-master/build/bin/llama-server \
@@ -25,10 +22,8 @@ ExecStart=/usr/bin/numactl --interleave=all -- \
   --alias glm-5.3-flash \
   --host 0.0.0.0 --port 8082 \
   --load-mode none \
-  --n-gpu-layers 99 \
-  --override-tensor "blk[.](5|6)[.]ffn_.*_exps=CUDA0,blk[.](16|17)[.]ffn_.*_exps=CUDA1,blk[.](28|29)[.]ffn_.*_exps=CUDA2,blk[.](39|40)[.]ffn_.*_exps=CUDA3,exps=CPU" \
+  --n-gpu-layers 99 --override-tensor exps=CPU \
   --no-op-offload \
-  --chat-template-file /home/llm/models/glm53_template.jinja \
   --ctx-size 65536 \
   --parallel 1 \
   --threads 80 \

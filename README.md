@@ -6,7 +6,7 @@ Notes and scripts for running modern LLMs on an IBM AC922 (8335-GTH): 2× POWER9
 This is a platform vendors no longer support: no apt repo for NVIDIA on ppc64el, the last driver is
 550.54.15 / CUDA 12.4, no PyTorch+CUDA wheels, and Volta lacks bf16/FP8. Everything here was made to work by hand.
 
-> **Status:** GLM-5.3-Flash runs at ~6 tok/s generation, 11–16 tok/s prompt processing (see below).
+> **Status:** GLM-5.3-Flash runs at ~6.5 tok/s generation, 12–19 tok/s prompt processing on 4× V100 + RAM (see below).
 
 ## What's inside
 
@@ -57,24 +57,36 @@ Rough decode estimate: `tok/s ≈ effective_bw / bytes_of_active_experts_per_tok
 - 240 GB does not fit one NUMA node (256 GB each), so weights are interleaved over both sockets:
   `numactl --interleave=all --` + `--load-mode none` (no mmap, anonymous allocation, so the policy applies;
   there is no `--no-mmap` in 0.6).
-- `-ngl 99 --override-tensor exps=CPU`: whole graph on the GPUs, only MoE experts in RAM. Plain `--fit`
-  put entire layers on the CPU.
-- **`--no-op-offload` is essential.** With op offload on, every prompt ubatch copies all ~220 GB of experts to
+- `-ngl 99` + `--override-tensor`: whole graph on the GPUs, experts of 2 layers per GPU in the spare VRAM
+  (~5 GB per layer), the rest in RAM:
+  `blk[.](5|6)[.]ffn_.*_exps=CUDA0,…,exps=CPU`. Plain `--fit` put an entire layer (attention included) on the CPU
+  and was slower.
+- **`--no-op-offload` is essential.** With op offload on, every prompt ubatch copies all CPU-side experts to
   the GPU from pageable memory on a single thread: prompt processing drops to ~1.3 tok/s.
 - MTP (`--spec-type draft-mtp`) is not implemented for glm5-next yet ("NextN graph not implemented yet").
 
-Unit: [`systemd/llama-glm.service`](systemd/llama-glm.service).
+Units: [`systemd/llama-glm.service`](systemd/llama-glm.service) (4 GPUs),
+[`systemd/llama-glm.2gpu-expsCPU.service`](systemd/llama-glm.2gpu-expsCPU.service) (one GPU pair).
 
-Measured 2026-10-07, UD-Q5_K_XL, experts in RAM (both sockets interleaved), rest on 2× V100, 80 threads,
+Measured 2026-10-07, UD-Q5_K_XL, experts in RAM interleaved over both sockets, 80 threads, 64K context,
 thinking off, prompts of 90–2188 tokens:
 
 | Config | Prompt processing, tok/s | Generation, tok/s |
 | --- | --- | --- |
-| `--fit` only | 1.2–1.5 | 5.4–5.6 |
-| `-ngl 99 -ot exps=CPU` | 1.3–4.1 | 5.7–6.2 |
-| **`-ngl 99 -ot exps=CPU --no-op-offload`** | **10.6–15.6** | **6.0–6.2** |
+| 2 GPU, `--fit` only | 1.2–1.5 | 5.4–5.6 |
+| 2 GPU, `-ngl 99 -ot exps=CPU` | 1.3–4.1 | 5.7–6.2 |
+| 2 GPU, `-ngl 99 -ot exps=CPU --no-op-offload` | 10.6–15.6 | 6.0–6.2 |
+| 4 GPU, `--fit --no-op-offload` | 10.9–17.4 | 5.4–5.6 |
+| **4 GPU, `-ngl 99`, 8 expert layers on GPU, `--no-op-offload`** | **12.3–18.8** | **6.5–6.7** |
 
-Load time ~3 min (from page cache), VRAM used ~8.5 + 5.9 GB with 64K context.
+Load time ~3 min (from page cache), VRAM 13.6–13.9 of 16 GB per card.
+
+### Thinking control
+
+The stock GLM-5.3-Flash chat template always opens `<think>` and ignores `enable_thinking`. The patched
+[`glm53_template.jinja`](llama.cpp/glm53_template.jinja) (`--chat-template-file`) prefills `<think></think>`
+when `chat_template_kwargs.enable_thinking` is `false`. Depth is `reasoning_effort`: `low` / `high` / `max`
+(default `max`), accepted top-level or in `chat_template_kwargs`. Test: [`glm_think_test.py`](llama.cpp/glm_think_test.py).
 
 ## Hardware notes
 
