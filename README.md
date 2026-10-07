@@ -90,8 +90,9 @@ when `chat_template_kwargs.enable_thinking` is `false`. Depth is `reasoning_effo
 
 ## Hardware notes
 
-- GPU 0–1 and GPU 2–3 are NVLink pairs, each pair attached to its own socket; run one model per pair and bind
-  it with `numactl --cpunodebind/--membind` to the matching socket.
+- GPU 0–1 and GPU 2–3 are NVLink pairs, each pair attached to its own socket. For models that fit a pair, run
+  one model per pair and bind it with `numactl --cpunodebind/--membind` to the matching socket; a model that
+  needs RAM from both sockets (GLM-5.3-Flash) uses all four GPUs and `numactl --interleave=all`.
 - V100 has no bf16: vLLM runs fp16/fp32 only.
 
 ## License
