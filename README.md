@@ -6,7 +6,7 @@ Notes and scripts for running modern LLMs on an IBM AC922 (8335-GTH): 2× POWER9
 This is a platform vendors no longer support: no apt repo for NVIDIA on ppc64el, the last driver is
 550.54.15 / CUDA 12.4, no PyTorch+CUDA wheels, and Volta lacks bf16/FP8. Everything here was made to work by hand.
 
-> **Status:** work in progress. GLM-5.3-Flash benchmarks below are pending.
+> **Status:** GLM-5.3-Flash runs at ~6 tok/s generation, 11–16 tok/s prompt processing (see below).
 
 ## What's inside
 
@@ -50,20 +50,31 @@ Rough decode estimate: `tok/s ≈ effective_bw / bytes_of_active_experts_per_tok
 
 ### GLM-5.3-Flash (320B total, 18B active), UD-Q5_K_XL, ~240 GB
 
-- `glm5_next` is not in upstream llama.cpp yet; the unsloth branch `glm5next/upstream` **builds for sm_70 on
-  ppc64le without patches** ([`build_llama_glm5next.sh`](llama.cpp/build_llama_glm5next.sh)). Its wmma
-  lightning-indexer kernel is gated on Turing+, Volta takes the generic path.
+- Upstream llama.cpp (v0.6.0, arch `glm5-next`) **builds for sm_70 on ppc64le without patches**
+  ([`build_llama_master.sh`](llama.cpp/build_llama_master.sh)). The wmma lightning-indexer kernel is gated
+  on Turing+, Volta takes the generic path. Use upstream, not the older unsloth `glm5next` branch: current
+  unsloth GGUFs say `glm5-next`, the branch expects `glm5next` (`unknown model architecture`).
 - 240 GB does not fit one NUMA node (256 GB each), so weights are interleaved over both sockets:
-  `numactl --interleave=all` + `--no-mmap` (anonymous allocation, so the policy applies).
-- No `-ngl` / `-ot`: `--fit` (on by default) puts what fits on the GPUs and spills MoE experts to RAM.
-- MTP speculative decoding: `--spec-type draft-mtp --spec-draft-n-max 2`.
+  `numactl --interleave=all --` + `--load-mode none` (no mmap, anonymous allocation, so the policy applies;
+  there is no `--no-mmap` in 0.6).
+- `-ngl 99 --override-tensor exps=CPU`: whole graph on the GPUs, only MoE experts in RAM. Plain `--fit`
+  put entire layers on the CPU.
+- **`--no-op-offload` is essential.** With op offload on, every prompt ubatch copies all ~220 GB of experts to
+  the GPU from pageable memory on a single thread: prompt processing drops to ~1.3 tok/s.
+- MTP (`--spec-type draft-mtp`) is not implemented for glm5-next yet ("NextN graph not implemented yet").
 
 Unit: [`systemd/llama-glm.service`](systemd/llama-glm.service).
 
+Measured 2026-10-07, UD-Q5_K_XL, experts in RAM (both sockets interleaved), rest on 2× V100, 80 threads,
+thinking off, prompts of 90–2188 tokens:
+
 | Config | Prompt processing, tok/s | Generation, tok/s |
 | --- | --- | --- |
-| Q5_K_XL, 2× V100 + RAM, no MTP | _pending_ | _pending_ |
-| Q5_K_XL, 2× V100 + RAM, MTP n=2 | _pending_ | _pending_ |
+| `--fit` only | 1.2–1.5 | 5.4–5.6 |
+| `-ngl 99 -ot exps=CPU` | 1.3–4.1 | 5.7–6.2 |
+| **`-ngl 99 -ot exps=CPU --no-op-offload`** | **10.6–15.6** | **6.0–6.2** |
+
+Load time ~3 min (from page cache), VRAM used ~8.5 + 5.9 GB with 64K context.
 
 ## Hardware notes
 

@@ -1,10 +1,10 @@
 #!/bin/bash
-# Build unsloth llama.cpp branch glm5next/upstream (GLM-5.3-Flash support) for V100 (sm_70), ppc64le.
-# Sources: tarball of the commit in ~/llama.cpp-glm5next/UNSLOTH_COMMIT (separate from ~/llama.cpp).
+# Build unsloth upstream llama.cpp master (GLM-5.3-Flash = arch glm5-next) for V100 (sm_70), ppc64le.
+# Sources: tarball of ggml-org/llama.cpp master, commit in ~/llama.cpp-master/COMMIT (separate from ~/llama.cpp).
 set -e
 export PATH=/usr/local/cuda-12.4/bin:$PATH
 export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:$LD_LIBRARY_PATH
-cd ~/llama.cpp-glm5next
+cd ~/llama.cpp-master
 rm -rf build
 cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=70 -DCMAKE_BUILD_TYPE=Release \
   -DLLAMA_CURL=ON -DLLAMA_BUILD_TESTS=OFF

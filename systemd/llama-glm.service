@@ -10,15 +10,20 @@ Group=llm
 Environment=CUDA_VISIBLE_DEVICES=2,3
 Environment=LD_LIBRARY_PATH=/usr/local/cuda/lib64
 # 240 GB of weights do not fit one NUMA node (256 GB each) -> interleave pages over both sockets.
-# --no-mmap: weights are allocated anonymously, so the interleave policy applies to them.
-# No -ngl / -ot: --fit (default on) puts everything on GPU it can and spills MoE experts to RAM.
-# MTP (after baseline is measured): --spec-type draft-mtp --spec-draft-n-max 2
-ExecStart=/usr/bin/numactl --interleave=all \
-  /home/llm/llama.cpp-glm5next/build/bin/llama-server \
+# --load-mode none (no mmap; llama.cpp 0.6 has no --no-mmap): weights are allocated anonymously,
+# so the interleave policy applies to them.
+# -ngl 99 + exps=CPU: whole graph on GPU, only MoE experts in RAM. (--fit alone put whole layers on CPU.)
+# --no-op-offload: otherwise every prompt ubatch copies all ~220 GB of experts to the GPU from pageable
+#   memory (single thread) -> prompt 1.3 t/s; without it the experts run on CPU -> 11-16 t/s.
+# MTP (--spec-type draft-mtp) is not implemented for glm5-next in llama.cpp 0.6 ("NextN graph not implemented yet").
+ExecStart=/usr/bin/numactl --interleave=all -- \
+  /home/llm/llama.cpp-master/build/bin/llama-server \
   --model /home/llm/models/GLM-5.3-Flash-UD-Q5_K_XL/GLM-5.3-Flash-UD-Q5_K_XL-00001-of-00006.gguf \
   --alias glm-5.3-flash \
   --host 0.0.0.0 --port 8082 \
-  --no-mmap \
+  --load-mode none \
+  --n-gpu-layers 99 --override-tensor exps=CPU \
+  --no-op-offload \
   --ctx-size 65536 \
   --parallel 1 \
   --threads 80 \
