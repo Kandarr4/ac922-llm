@@ -6,7 +6,7 @@ Notes and scripts for running modern LLMs on an IBM AC922 (8335-GTH): 2× POWER9
 This is a platform vendors no longer support: no apt repo for NVIDIA on ppc64el, the last driver is
 550.54.15 / CUDA 12.4, no PyTorch+CUDA wheels, and Volta lacks bf16/FP8. Everything here was made to work by hand.
 
-> **Status:** GLM-5.3-Flash runs at ~6.5 tok/s generation, 12–19 tok/s prompt processing on 4× V100 + RAM (see below).
+> **Status:** GLM-5.3-Flash 320B: ~6.5 tok/s; Step-3.7-Flash 198B with MTP: ~16 tok/s — both on 4× V100 + RAM (see below).
 
 ## What's inside
 
@@ -87,6 +87,28 @@ The stock GLM-5.3-Flash chat template always opens `<think>` and ignores `enable
 [`glm53_template.jinja`](llama.cpp/glm53_template.jinja) (`--chat-template-file`) prefills `<think></think>`
 when `chat_template_kwargs.enable_thinking` is `false`. Depth is `reasoning_effort`: `low` / `high` / `max`
 (default `max`), accepted top-level or in `chat_template_kwargs`. Test: [`glm_think_test.py`](llama.cpp/glm_think_test.py).
+
+### Step-3.7-Flash (198B total, 11B active), UD-Q4_K_XL, 122 GB — ~16 tok/s
+
+About the same tier as GLM-5.3-Flash on public indexes, but 11B active parameters and ~55% of the experts fit
+in 4× 16 GB VRAM, so far less is read from RAM per token. Unit: [`systemd/llama-step.service`](systemd/llama-step.service).
+
+- Upstream llama.cpp 0.6 (arch `step35`), placement by `--fit`, `--no-op-offload`, same NUMA recipe as above.
+- **MTP:** the unsloth GGUFs have the NextN layers stripped ("model doesn't contain MTP layers"). StepFun ships
+  them separately: `Step3.7-flash-mtp-Q8_0.gguf` (3.7 GB) from `stepfun-ai/Step-3.7-Flash-GGUF`, loaded with
+  `--spec-type draft-mtp --spec-draft-model <file>`. Two draft tokens beat three on this box.
+- Thinking toggle: same issue as GLM, patched by [`patch_think_template.py`](llama.cpp/patch_think_template.py).
+
+| Config | Prompt processing, tok/s | Generation, tok/s |
+| --- | --- | --- |
+| no MTP | 27–49 | 11.3–13.2 |
+| MTP, 3 draft tokens (57% accepted) | 29–45 | 13.2–14.9 |
+| **MTP, 2 draft tokens (71% accepted)** | **28–44** | **15.4–17.0** |
+
+First impressions (not a proper eval): corrections in Russian and Kazakh are right, but the explanations are
+weaker than GLM-5.3-Flash's and sometimes invented.
+
+Download helper for any quant folder of a GGUF repo: [`dl_hf_gguf.sh`](llama.cpp/dl_hf_gguf.sh).
 
 ## Hardware notes
 

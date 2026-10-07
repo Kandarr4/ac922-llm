@@ -1,0 +1,38 @@
+[Unit]
+Description=llama-server: Step-3.7-Flash 198B-A11B UD-Q4_K_XL (4 GPUs + MoE experts spilled to RAM)
+After=network-online.target nvidia-persistenced.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=llm
+Group=llm
+Environment=CUDA_VISIBLE_DEVICES=0,1,2,3
+Environment=LD_LIBRARY_PATH=/usr/local/cuda/lib64
+# Same recipe as llama-glm.service: weights interleaved over both sockets, no mmap,
+# --no-op-offload (otherwise prompt processing copies all CPU-side experts to the GPU per ubatch).
+# Placement by --fit (no -ngl / -ot): ~58 GB on the GPUs, ~63 GB of experts in RAM.
+# MTP: unsloth GGUFs have the NextN layers stripped ("model doesn't contain MTP layers"); the sidecar
+#   Step3.7-flash-mtp-Q8_0.gguf from stepfun-ai/Step-3.7-Flash-GGUF is loaded as the draft model.
+#   n-max 2: 15.4-17.0 t/s, 71% accepted; n-max 3: 13.2-14.9 t/s; no MTP: 11.3-13.2 t/s.
+# --chat-template-file: stock template always opens <think>; patched by tools/patch_think_template.py.
+ExecStart=/usr/bin/numactl --interleave=all -- \
+  /home/llm/llama.cpp-master/build/bin/llama-server \
+  --model /home/llm/models/Step-3.7-Flash-UD-Q4_K_XL/Step-3.7-Flash-UD-Q4_K_XL-00001-of-00004.gguf \
+  --alias step-3.7-flash \
+  --host 0.0.0.0 --port 8083 \
+  --load-mode none \
+  --no-op-offload \
+  --spec-type draft-mtp --spec-draft-n-max 2 \
+  --spec-draft-model /home/llm/models/Step-3.7-Flash-UD-Q4_K_XL/Step3.7-flash-mtp-Q8_0.gguf \
+  --chat-template-file /home/llm/models/step37_template.jinja \
+  --ctx-size 65536 \
+  --parallel 1 \
+  --threads 80 \
+  --metrics
+Restart=on-failure
+RestartSec=30
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=multi-user.target
